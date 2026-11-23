@@ -1,5 +1,5 @@
-"""Production WSGI entrypoint for Render/Gunicorn."""
-from app import app, init_db
 
-# Initialize/migrate database on startup (not during build).
-init_db()
+from app import app
+
+if __name__ == "__main__":
+    app.run()
