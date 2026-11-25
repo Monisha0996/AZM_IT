@@ -1,4 +1,48 @@
 {% extends 'base.html' %}{% block title %}Reporting Chart{% endblock %}{% block content %}<div class="top"><div><h1>Reporting Structure</h1><p class="sub">Select an employee or department to display a reporting view. Nothing is displayed until selected.</p></div><a class="btn secondary" href="{{url_for('employees')}}">Employee Directory</a></div>
 <form class="panel form-panel" method="get"><div class="fields"><div class="field"><label>View an employee's reporting line</label><select name="employee"><option value="">Select employee</option>{% for e in employees %}<option value="{{e.id}}" {{'selected' if chosen_employee==e.id|string else ''}}>{{e.name}} ({{e.employee_code}})</option>{% endfor %}</select></div><div class="field"><label>Or select department</label><select name="department"><option value="">Select department</option>{% for d in departments %}<option value="{{d.name}}" {{'selected' if chosen_department==d.name else ''}}>{{d.name}}</option>{% endfor %}</select></div></div><div class="form-actions"><button class="btn">View Chart</button><a class="btn secondary" href="{{url_for('org_chart')}}">Clear</a></div></form>
 {% if selected %}<div class="panel org-panel"><h2>Reporting line — {{selected.name}}</h2><div class="org-chain">{% for manager in chain %}<div class="org-node"><div class="strong">{{manager.name}}</div><div class="small">{{manager.title or 'Employee'}} · {{manager.department}} · {{manager.employee_code}}</div><span class="small">Manager</span></div><div class="org-arrow">↓</div>{% endfor %}<div class="org-node org-focus"><div class="strong">{{selected.name}}</div><div class="small">{{selected.title or 'Employee'}} · {{selected.department}} · {{selected.employee_code}}</div><span class="small">Selected employee</span></div></div>{% if team %}<h2>Direct Reports ({{team|length}})</h2><div class="org-grid">{% for e in team %}<a class="org-node" href="{{url_for('org_chart',employee=e.id)}}"><div class="strong">{{e.name}}</div><div class="small">{{e.title or 'Employee'}} · {{e.employee_code}}</div></a>{% endfor %}</div>{% else %}<p class="sub">No direct reports recorded.</p>{% endif %}</div>{% endif %}
-{% if chosen_department %}<div class="panel org-panel"><h2>{{chosen_department}} — reporting overview ({{group|length}} employees)</h2><p class="sub">Employees within the department, with their reporting manager. Select an employee to see their complete chain and direct reports.</p>{% macro node(e) %}<div class="tree-node"><a class="org-node" href="{{url_for('org_chart',employee=e.id)}}"><div class="strong">{{e.name}}</div><div class="small">{{e.title or 'Employee'}} · {{e.employee_code}}</div></a>{% set children=group|selectattr('manager_id','equalto',e.id)|list %}{% if children %}<div class="tree-children">{% for child in children %}{{node(child)}}{% endfor %}</div>{% endif %}</div>{% endmacro %}<div class="org-tree">{% for root in group_roots %}{{node(root)}}{% else %}<p>No employees in this department.</p>{% endfor %}</div></div>{% endif %}{% endblock %}
+
+{% if chosen_department %}
+<section class="panel org-panel">
+  <h2>{{ chosen_department }} — Reporting Overview ({{ group|length }} employees)</h2>
+  <p class="sub">
+    Reporting lines follow each employee's assigned manager.
+    Click an employee to view their full reporting chain.
+  </p>
+
+  {% macro node(e) %}
+  <li>
+    <a class="org-card"
+       href="{{ url_for('org_chart', employee=e.id) }}">
+      <span class="org-card-name">{{ e.name }}</span>
+      <span class="org-card-detail">{{ e.title or 'Employee' }}</span>
+      <span class="org-card-code">{{ e.employee_code }}</span>
+    </a>
+
+    {% set children = group|selectattr('manager_id','equalto',e.id)|list %}
+    {% if children %}
+    <ul>
+      {% for child in children %}
+        {{ node(child) }}
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </li>
+  {% endmacro %}
+
+  <div class="org-chart-scroll">
+    <div class="org-chart-tree">
+      <ul>
+        {% for root in group_roots %}
+          {{ node(root) }}
+        {% else %}
+          <li>No employees in this department.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+
+{% endblock %}
