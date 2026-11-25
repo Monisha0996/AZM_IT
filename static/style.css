@@ -3,3 +3,13 @@
 .actions form{display:inline;margin:0}.danger-btn{background:#bc3145}.danger-btn:disabled{background:#d9dde4;color:#768292;opacity:.8;cursor:not-allowed}.badge.Disabled{background:#f1e9e9;color:#9d3445}td .small{margin-top:5px}
 .org-panel{padding:25px}.org-panel h2{margin:0 0 18px}.org-chain{display:flex;flex-direction:column;align-items:center;margin:20px auto 35px}.org-node{border:1px solid #dbe4f0;background:#fff;border-radius:12px;padding:17px 21px;min-width:230px;box-shadow:0 3px 12px #1728410a}.org-node .strong{font-size:14px;margin-bottom:8px}.org-focus{border:2px solid #c82b3d;background:#fff4f5}.org-arrow{font-size:23px;color:#8a97aa;margin:6px}.org-grid{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}.org-grid .org-node{min-width:210px;flex:1 1 210px;max-width:360px}.org-grid a:hover{border-color:#c82b3d}.field .small{margin-top:6px}input[readonly]{background:#f2f5fa;color:#59667c}
 .org-tree{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:22px}.tree-node{display:flex;flex-direction:column;align-items:center;gap:14px;position:relative}.tree-node .org-node{display:block;min-width:190px}.tree-children{display:flex;flex-wrap:wrap;gap:15px;justify-content:center;border-top:2px solid #e3e8f0;padding-top:16px}.tree-children>.tree-node:before{content:' ';height:16px;border-left:2px solid #ced7e3;position:absolute;top:-16px;left:50%}.tree-node>.org-node:hover{border-color:#c82b3d}
+/* Employee view menu and document upload */
+.view-menu{position:relative;display:inline-block;}
+.view-menu summary{list-style:none;cursor:pointer;white-space:nowrap;}
+.view-menu summary::-webkit-details-marker{display:none;}
+.view-options{position:absolute;right:0;top:calc(100% + 4px);min-width:185px;z-index:20;background:white;border:1px solid #dbe2ec;border-radius:9px;box-shadow:0 7px 20px #19253b24;padding:6px;}
+.view-options a{display:block;text-decoration:none;color:#22314b;font-size:13px;padding:10px 12px;border-radius:5px;white-space:nowrap;}
+.view-options a:hover{background:#f1f4f9;}
+.document-upload{display:flex;align-items:end;gap:16px;flex-wrap:wrap;margin-top:14px;}
+.document-upload label{display:flex;flex-direction:column;gap:7px;min-width:210px;font-size:13px;font-weight:600;}
+.document-upload input,.document-upload select{min-height:39px;max-width:360px;}

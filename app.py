@@ -1,17 +1,21 @@
 """Employee Application Access Register — Flask + SQLite.
 Run `python app.py` after installing requirements.
 """
-import os, csv, io, sqlite3, secrets
+import os, csv, io, sqlite3, secrets, uuid, zipfile
+from pathlib import Path
 from datetime import date, datetime
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, session, abort, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, session, abort, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", os.path.join(BASE, "uploads"))).resolve()
+MAX_UPLOAD = 10 * 1024 * 1024
+ALLOWED_FILE_TYPES = {".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 DB = os.environ.get('DATABASE_PATH', os.path.join(BASE, 'access_register.db'))
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','0') == '1', MAX_CONTENT_LENGTH=1024*1024)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE','0') == '1', MAX_CONTENT_LENGTH=MAX_UPLOAD + 128 * 1024)
 LEVELS = ['Read Only','Standard User','Power User','Manager','Admin','Super Admin']
 STATUSES = ['Active','Pending','Suspended','Revoked']
 EMP_STATUSES = ['Active','On Leave','Exited','Disabled']
@@ -32,6 +36,18 @@ def init_db():
         CREATE TABLE IF NOT EXISTS applications (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, category TEXT, owner TEXT, vendor TEXT, sensitivity TEXT NOT NULL DEFAULT 'Confidential', notes TEXT, status TEXT NOT NULL DEFAULT 'Active');
         CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE RESTRICT, application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE RESTRICT, access_level TEXT NOT NULL, scope TEXT, status TEXT NOT NULL DEFAULT 'Pending', granted_on TEXT, reviewed_on TEXT, review_due TEXT, approved_by TEXT, ticket TEXT, UNIQUE(employee_id, application_id));
         CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+        CREATE TABLE IF NOT EXISTS employee_documents (
+            id INTEGER PRIMARY KEY,
+            employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+            original_name TEXT NOT NULL,
+            stored_name TEXT NOT NULL UNIQUE,
+            doc_type TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            uploaded_by TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_documents_employee ON employee_documents(employee_id);
         CREATE TABLE IF NOT EXISTS used_employee_codes (code TEXT PRIMARY KEY, first_used TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, entity TEXT NOT NULL, detail TEXT);
         CREATE INDEX IF NOT EXISTS ix_assign_status ON assignments(status);
@@ -163,7 +179,8 @@ def employees():
         departments=db.execute('SELECT name FROM departments ORDER BY name').fetchall()
         rows=db.execute("""SELECT e.*,m.name manager_name, COUNT(a.id) total_access,
             (SELECT COUNT(*) FROM assignments t WHERE t.employee_id=e.id) total_assignments,
-            (SELECT COUNT(*) FROM employees x WHERE x.manager_id=e.id) direct_reports
+            (SELECT COUNT(*) FROM employees x WHERE x.manager_id=e.id) direct_reports,
+            (SELECT COUNT(*) FROM employee_documents d WHERE d.employee_id=e.id) document_count
             FROM employees e LEFT JOIN employees m ON m.id=e.manager_id
             LEFT JOIN assignments a ON a.employee_id=e.id AND a.status='Active'
             WHERE (e.name LIKE ? OR e.email LIKE ? OR e.employee_code LIKE ?)
@@ -301,6 +318,8 @@ def delete_record(kind,item_id):
             flash('Deletion not confirmed.','error')
         elif kind=='Employee' and db.execute('SELECT 1 FROM employees WHERE manager_id=?',(item_id,)).fetchone():
             flash('Cannot delete this employee while other employees report to them. Reassign reports first.','error')
+        elif kind=='Employee' and db.execute('SELECT 1 FROM employee_documents WHERE employee_id=?',(item_id,)).fetchone():
+            flash('Cannot delete employee with attached documents. Disable the employee to preserve the archive, or delete attachments first.','error')
         elif db.execute(f'SELECT COUNT(*) FROM assignments WHERE {fk}=?',(item_id,)).fetchone()[0]:
             flash(f'Cannot delete {kind.lower()}: linked access history exists. Disable it instead to preserve audit records.','error')
         else:
@@ -318,6 +337,101 @@ def delete_employee(item_id):
 @edit_required
 def delete_application(item_id):
     return delete_record('Application',item_id)
+
+# Asset allocation and supporting documents (viewable by all authorised users).
+def valid_document(file_obj, suffix):
+    """Check file signatures, not only browser-supplied MIME types."""
+    file_obj.stream.seek(0)
+    start = file_obj.stream.read(16)
+    file_obj.stream.seek(0)
+    if suffix == '.pdf': return start.startswith(b'%PDF-')
+    if suffix == '.png': return start.startswith(b'\x89PNG\r\n\x1a\n')
+    if suffix in ('.jpg', '.jpeg'): return start.startswith(b'\xff\xd8\xff')
+    if suffix == '.docx':
+        try:
+            with zipfile.ZipFile(file_obj.stream) as z:
+                return '[Content_Types].xml' in z.namelist() and 'word/document.xml' in z.namelist()
+        except (zipfile.BadZipFile, OSError): return False
+        finally: file_obj.stream.seek(0)
+    return False
+
+@app.route('/employees/<int:employee_id>/documents', methods=['GET', 'POST'])
+@login_required
+def employee_documents(employee_id):
+    with conn() as db:
+        employee = db.execute('SELECT * FROM employees WHERE id=?', (employee_id,)).fetchone()
+        if not employee: abort(404)
+        if request.method == 'POST':
+            if not can_edit(): abort(403)
+            uploaded = request.files.get('attachment')
+            kind = request.form.get('doc_type', 'Asset Allocation').strip()
+            allowed_kinds = ('Asset Allocation', 'Handover / Return', 'Other')
+            if not uploaded or not uploaded.filename:
+                flash('Choose a file to upload.', 'error')
+            elif kind not in allowed_kinds:
+                flash('Choose a valid document category.', 'error')
+            else:
+                filename = os.path.basename(uploaded.filename.replace('\\', '/')).strip()
+                suffix = Path(filename).suffix.lower()
+                if suffix not in ALLOWED_FILE_TYPES or not valid_document(uploaded, suffix):
+                    flash('Use a valid PDF, DOCX, PNG, or JPG file.', 'error')
+                else:
+                    # Enforce actual file size even if the request Content-Length is unavailable.
+                    uploaded.stream.seek(0, 2)
+                    size = uploaded.stream.tell()
+                    uploaded.stream.seek(0)
+                    if not 0 < size <= MAX_UPLOAD:
+                        flash('File must be between 1 byte and 10 MB.', 'error')
+                    else:
+                        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                        stored = uuid.uuid4().hex + suffix
+                        dest = UPLOAD_DIR / stored
+                        try:
+                            uploaded.save(dest)
+                            db.execute("""INSERT INTO employee_documents
+                                (employee_id,original_name,stored_name,doc_type,mime_type,size_bytes,uploaded_by,uploaded_at)
+                                VALUES (?,?,?,?,?,?,?,?)""",
+                                (employee_id,filename[:200],stored,kind,ALLOWED_FILE_TYPES[suffix],size,session['username'],datetime.now().isoformat(timespec='seconds')))
+                            audit(db,'Uploaded','Employee Document',f'{employee["employee_code"]}: {filename[:120]}')
+                            flash('Document uploaded successfully.', 'success')
+                        except Exception:
+                            dest.unlink(missing_ok=True)
+                            raise
+                        return redirect(url_for('employee_documents', employee_id=employee_id))
+        docs = db.execute('SELECT * FROM employee_documents WHERE employee_id=? ORDER BY uploaded_at DESC, id DESC', (employee_id,)).fetchall()
+    return render_template('employee_documents.html', employee=employee, docs=docs)
+
+@app.route('/employee-documents/<int:doc_id>/file')
+@login_required
+def employee_document_file(doc_id):
+    with conn() as db:
+        doc = db.execute('SELECT * FROM employee_documents WHERE id=?', (doc_id,)).fetchone()
+    if not doc: abort(404)
+    path = UPLOAD_DIR / doc['stored_name']
+    if not path.is_file(): abort(404, description='The document file is missing from storage. Check persistent disk configuration.')
+    inline = request.args.get('preview') == '1' and doc['mime_type'] in ('application/pdf', 'image/png', 'image/jpeg')
+    response = send_file(path, mimetype=doc['mime_type'], as_attachment=not inline,
+                         download_name=doc['original_name'], conditional=True)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = 'private, no-store'
+    if inline:
+        response.headers['Content-Security-Policy'] = 'sandbox'
+    return response
+
+@app.post('/employee-documents/<int:doc_id>/delete')
+@edit_required
+def delete_employee_document(doc_id):
+    if request.form.get('confirm') != 'DELETE': abort(400)
+    with conn() as db:
+        doc = db.execute("""SELECT d.*, e.employee_code FROM employee_documents d
+                           JOIN employees e ON e.id=d.employee_id WHERE d.id=?""", (doc_id,)).fetchone()
+        if not doc: abort(404)
+        db.execute('DELETE FROM employee_documents WHERE id=?', (doc_id,))
+        audit(db,'Deleted','Employee Document',f'{doc["employee_code"]}: {doc["original_name"][:120]}')
+        employee_id = doc['employee_id']
+    (UPLOAD_DIR / doc['stored_name']).unlink(missing_ok=True)
+    flash('Document deleted.', 'success')
+    return redirect(url_for('employee_documents', employee_id=employee_id))
 
 @app.route('/access')
 @login_required

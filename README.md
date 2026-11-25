@@ -86,3 +86,13 @@ To add a new administrator: sign in as a Super Admin → **System Users** → **
 **Important operational safeguards:** Disabling employees in this inventory does not disable logins at external PSP, MT5, CRM, Sumsub, or other systems. Actual application access needs to be revoked separately. This app has password-based authentication but not MFA, SSO, login throttling, password-recovery workflows, or centrally managed encryption; it is intended as an internal MVP and must not be internet-exposed without security hardening, HTTPS, strong configuration, backups, and appropriate review. If used with real employee records, restrict network and filesystem access. System role changes and employee changes are recorded in the audit log.
 
 **Testing note:** The Python modules were syntax-checked, every HTML template was parsed by Jinja2, and database initialization/migration was validated against new and legacy SQLite schemas. A complete live Flask HTTP test was not run in the build environment because Flask was not installed and package downloads were unavailable.
+
+
+## V4 — Employee asset attachments
+- Employees → **View** dropdown → **Reporting chart** or **Asset documents**.
+- Admin and Super Admin: upload/delete PDF, DOCX, JPG or PNG (max 10MB). Read Only: view/download.
+- Each uploaded file belongs to one employee and is stored under a generated filename; employee deletion is blocked while attachments exist.
+- **Render persistent disk required:** mount a disk at `/opt/render/project/src/storage`, and set both `DATABASE_PATH=/opt/render/project/src/storage/access_register.db` and `UPLOAD_DIR=/opt/render/project/src/storage/uploads`.
+- Existing database will automatically add the `employee_documents` table. **Back up your database and storage before upgrading.**
+- Files in the old ephemeral filesystem are not migrated automatically.
+- Production: keep a single Gunicorn worker with SQLite, protect the host and user accounts (MFA or identity provider recommended), regularly back up database + upload directory, and verify UAE data-residency requirements.
